@@ -1,18 +1,42 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 export interface TrackData {
   title: string;
   artist: string;
   albumArt?: string;
-  spotifyId: string;
-  ytmusicId?: string;
+  ytmusicId: string;
 }
 
 export function useMusicPlayer() {
   const [currentTrack, setCurrentTrack] = useState<TrackData | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [platform, setPlatform] = useState<'spotify' | 'ytmusic'>('spotify');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Initialize audio element
+  useEffect(() => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.onplay = () => setIsPlaying(true);
+      audioRef.current.onpause = () => setIsPlaying(false);
+      audioRef.current.onended = () => setIsPlaying(false); // Can trigger next track here later
+      audioRef.current.onerror = (e) => {
+        console.error("Audio playback error:", e);
+        setError("Failed to play audio.");
+        setIsPlaying(false);
+      };
+    }
+
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+    };
+  }, []);
+
+  // Set up MediaSession API
   useEffect(() => {
     if (!currentTrack || !('mediaSession' in navigator)) return;
 
@@ -38,57 +62,65 @@ export function useMusicPlayer() {
   }, [currentTrack]);
 
   const play = useCallback(() => {
-    setIsPlaying(true);
-    // Add actual play logic here
+    if (audioRef.current && audioRef.current.src) {
+      audioRef.current.play().catch(e => {
+        console.error("Playback failed:", e);
+        setError("Playback failed. Please interact with the document first.");
+      });
+    }
   }, []);
 
   const pause = useCallback(() => {
-    setIsPlaying(false);
-    // Add actual pause logic here
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
   }, []);
 
   const previousTrack = useCallback(() => {
-    console.log('Previous track');
+    console.log('Previous track clicked');
   }, []);
 
   const nextTrack = useCallback(() => {
-    console.log('Next track');
+    console.log('Next track clicked');
   }, []);
 
-  const handleSpotifyError = useCallback(() => {
-    if (currentTrack && currentTrack.ytmusicId) {
-      console.log(`Fallback: Switching from Spotify to YTMusic for track ${currentTrack.title}`);
-      setPlatform('ytmusic');
-      play();
-    } else {
-      console.error('Track failed to play on Spotify and no YTMusic fallback ID found.');
-    }
-  }, [currentTrack, play]);
-
-  const playTrack = useCallback((track: TrackData) => {
+  const playTrack = useCallback(async (track: TrackData) => {
     setCurrentTrack(track);
-    setPlatform('spotify'); // Try Spotify first
-    play();
+    setIsLoading(true);
+    setError(null);
 
-    // Simulate Spotify Premium check/error after short delay
-    setTimeout(() => {
-        // Mock error: user doesn't have premium
-        const mockSpotifyError = true;
-        if (mockSpotifyError) {
-             handleSpotifyError();
-        }
-    }, 1000);
-  }, [play, handleSpotifyError]);
+    try {
+      // Fetch the actual streaming URL
+      const response = await fetch(`/api/stream?id=${track.ytmusicId}`);
+      if (!response.ok) {
+        throw new Error('Failed to get stream URL');
+      }
+      const data = await response.json();
+
+      if (data.url && audioRef.current) {
+        audioRef.current.src = data.url;
+        audioRef.current.load();
+        await audioRef.current.play();
+      } else {
+         throw new Error("No URL returned from stream API");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Error playing track');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   return {
     currentTrack,
     isPlaying,
-    platform,
+    isLoading,
+    error,
     playTrack,
     play,
     pause,
     previousTrack,
     nextTrack,
-    handleSpotifyError
   };
 }
